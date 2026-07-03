@@ -49,6 +49,7 @@ com/musicplayer/scamusica/service/InternetState$State.class
 com/musicplayer/scamusica/storage/SongMetadataStore.class
 com/musicplayer/scamusica/service/DownloadManager$DownloadListener.class
 com/musicplayer/scamusica/service/DownloadManager.class
+com/musicplayer/scamusica/service/MemoryWatchdog.class
 com/musicplayer/scamusica/Main.class
 com/musicplayer/scamusica/controller/PlayerController$4.class
 com/musicplayer/scamusica/manager/LanguageManager.class

@@ -82,23 +82,21 @@ public class AdPlayer {
     }
 
     private void playNextAd() {
-        Ad nextAd = adQueue.poll();
-        if (nextAd == null) {
+        executor.submit(() -> {
+            while (isPlayingAd && !adQueue.isEmpty()) {
+                Ad nextAd = adQueue.poll();
+                if (nextAd == null) break;
+                try {
+                    playAdInternal(nextAd);
+                } catch (Exception e) {
+                    AppLogger.log("[AdPlayer] Error: " + e.getMessage());
+                    listener.onPlaybackError(e);
+                }
+            }
             AppLogger.log("[AdPlayer] Queue empty, resuming song");
             isPlayingAd = false;
             songPausedForAds = false;
             resumeSong();
-            return;
-        }
-
-        executor.submit(() -> {
-            try {
-                playAdInternal(nextAd);
-            } catch (Exception e) {
-                AppLogger.log("[AdPlayer] Error: " + e.getMessage());
-                listener.onPlaybackError(e);
-                playNextAd();
-            }
         });
     }
 
@@ -138,20 +136,16 @@ public class AdPlayer {
                     if (!isPlayingAd)
                         break;
                     int currentVol = (int) (originalVol * (1.0 - (double) i / steps));
-                    Platform.runLater(() -> {
-                        try {
-                            vlcPlayer.audio().setVolume(currentVol);
-                        } catch (Exception ignored) {
-                        }
-                    });
-                    Thread.sleep(100);
-                }
-                Platform.runLater(() -> {
                     try {
-                        vlcPlayer.audio().setVolume(0);
+                        vlcPlayer.audio().setVolume(currentVol);
                     } catch (Exception ignored) {
                     }
-                });
+                    Thread.sleep(100);
+                }
+                try {
+                    vlcPlayer.audio().setVolume(0);
+                } catch (Exception ignored) {
+                }
             } catch (Exception e) {
             }
 
@@ -241,9 +235,7 @@ public class AdPlayer {
 
         // Step 6: Ad done, notify
         Platform.runLater(() -> listener.onAdPlaybackFinished(ad));
-
-        // Step 7: Play next ad or resume song
-        playNextAd();
+        // Note: Loop handles next ad
     }
 
     private void resumeSong() {
