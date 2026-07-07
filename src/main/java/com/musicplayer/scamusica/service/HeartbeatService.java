@@ -75,7 +75,7 @@ public class HeartbeatService {
             } catch (Exception e) {
                 AppLogger.log("[HeartbeatService] Error in heartbeat task: " + e.getMessage());
             }
-        }, 0, 30, TimeUnit.SECONDS);
+        }, 0, 15, TimeUnit.MINUTES);
     }
 
     public void stop() {

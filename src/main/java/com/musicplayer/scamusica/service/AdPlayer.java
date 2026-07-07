@@ -41,9 +41,15 @@ public class AdPlayer {
     private volatile String savedSongPath = null;
     private volatile long savedSongTime = 0L;
 
+    private java.util.function.Supplier<Integer> adVolumeProvider;
+
     public AdPlayer(MediaPlayer vlcPlayer, AdPlaybackListener listener) {
         this.vlcPlayer = vlcPlayer;
         this.listener = listener;
+    }
+
+    public void setAdVolumeProvider(java.util.function.Supplier<Integer> adVolumeProvider) {
+        this.adVolumeProvider = adVolumeProvider;
     }
 
     public void queueAds(List<Ad> ads) {
@@ -156,7 +162,10 @@ public class AdPlayer {
                     AppLogger.log("[AdPlayer] Saving song position: " + savedSongTime);
                     vlcPlayer.controls().pause();
                     listener.onSongPaused("Ad starting");
-                    vlcPlayer.audio().setVolume(originalVol);
+                    
+                    int targetAdVol = (adVolumeProvider != null) ? adVolumeProvider.get() : originalVol;
+                    AppLogger.log("[AdPlayer] Setting ad volume to: " + targetAdVol);
+                    vlcPlayer.audio().setVolume(targetAdVol);
                 } catch (Exception ignored) {
                 }
             });
@@ -200,6 +209,12 @@ public class AdPlayer {
                         AppLogger.log("[AdPlayer] STARTING ACTUAL VLC PLAY");
                         boolean result = vlcPlayer.media().play(adUrl);
                         AppLogger.log("[AdPlayer] VLC PLAY RESULT = " + result);
+                        
+                        if (adVolumeProvider != null) {
+                            int targetAdVol = adVolumeProvider.get();
+                            vlcPlayer.audio().setVolume(targetAdVol);
+                            AppLogger.log("[AdPlayer] Re-applying ad volume: " + targetAdVol);
+                        }
 
                     } catch (Exception e) {
                         AppLogger.log("[AdPlayer] Failed to start ad audio: " + e.getMessage());

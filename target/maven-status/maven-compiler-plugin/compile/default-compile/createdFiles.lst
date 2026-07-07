@@ -41,6 +41,7 @@ com/musicplayer/scamusica/manager/DeviceFingerprint.class
 com/musicplayer/scamusica/ui/LeavingPopup.class
 com/musicplayer/scamusica/service/PlaylistApiService.class
 com/musicplayer/scamusica/util/OfflineCache.class
+com/musicplayer/scamusica/TestDownload.class
 com/musicplayer/scamusica/controller/PlayerController.class
 com/musicplayer/scamusica/util/EncryptionUtil.class
 com/musicplayer/scamusica/util/DeviceUtil.class

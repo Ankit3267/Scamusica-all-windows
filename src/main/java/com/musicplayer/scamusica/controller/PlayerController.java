@@ -3,6 +3,8 @@ package com.musicplayer.scamusica.controller;
 import com.musicplayer.scamusica.manager.LanguageManager;
 import com.musicplayer.scamusica.model.Ad;
 import com.musicplayer.scamusica.model.PlaylistTrack;
+import com.musicplayer.scamusica.model.VolumeSchedule;
+import com.musicplayer.scamusica.model.VolumeSettings;
 import com.musicplayer.scamusica.service.*;
 import com.musicplayer.scamusica.ui.*;
 
@@ -52,6 +54,9 @@ public class PlayerController extends Application {
     private Slider globalProgressSlider;
     private HBox globalControlsWrapper;
     private HBox globalBottomBar;
+    private Label globalLeftTime;
+    private Label globalRightTime;
+    private Label globalDownloadLabel;
 
     private MediaPlayer vlcPlayer;
     private AudioPlayerComponent vlcPlayerComponent;
@@ -109,11 +114,12 @@ public class PlayerController extends Application {
 
     private ScheduledExecutorService schedular;
     private BlockingQueue<Runnable> operationQueue = new LinkedBlockingQueue<>();
-    private java.util.concurrent.ExecutorService asyncExecutor = java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
-        Thread t = new Thread(r, "AsyncExecutor-Thread");
-        t.setDaemon(true);
-        return t;
-    });
+    private java.util.concurrent.ExecutorService asyncExecutor = java.util.concurrent.Executors.newFixedThreadPool(4,
+            r -> {
+                Thread t = new Thread(r, "AsyncExecutor-Thread");
+                t.setDaemon(true);
+                return t;
+            });
     private volatile boolean running = true;
     private List<Integer> lastServerIds = new ArrayList<>();
 
@@ -123,6 +129,9 @@ public class PlayerController extends Application {
 
     private AudioCallbackHandler audioCallbackHandler;
     private LedVuMeter ledVuMeter;
+    
+    private VolumeSettings currentVolumeSettings;
+    private Integer currentScheduleId;
 
     @Override
     public void start(Stage primaryStage) {
@@ -152,6 +161,9 @@ public class PlayerController extends Application {
 
         // Start memory watchdog
         MemoryWatchdog.getInstance().start();
+
+        // Start heartbeat service
+        HeartbeatService.getInstance().start();
 
         String appDir = System.getProperty("user.dir");
 
@@ -198,6 +210,7 @@ public class PlayerController extends Application {
                 asyncExecutor.shutdownNow();
             }
             MemoryWatchdog.getInstance().stop();
+            HeartbeatService.getInstance().stop();
         });
         VBox sidebar = sidebarUtil.createSidebar(sidebarTop, settingsIcon);
 
@@ -240,6 +253,13 @@ public class PlayerController extends Application {
         List<String> tempList;
         try {
             PlaylistApiService playlistApiService = apiService;
+            
+            try {
+                currentVolumeSettings = playlistApiService.fetchVolumeSettings();
+            } catch (Exception e) {
+                AppLogger.log("[PlayerController] Failed to fetch volume settings on startup: " + e.getMessage());
+            }
+
             List<String> apiPlaylists = playlistApiService.fetchPlaylistTitles();
             if (apiPlaylists != null && !apiPlaylists.isEmpty()) {
                 tempList = new ArrayList<>(apiPlaylists);
@@ -302,11 +322,13 @@ public class PlayerController extends Application {
         globalProgressSlider = progressSlider;
 
         Label leftTime = controlsUtil.createTimeLabel(false);
+        globalLeftTime = leftTime;
         Label rightTime = controlsUtil.createTimeLabel(true);
+        globalRightTime = rightTime;
         HBox timesRow = controlsUtil.createTimesRow(leftTime, rightTime);
         HBox progressRow = controlsUtil.createProgressRow(progressSlider);
         // Original line — touch mat karo
-// LedVuMeter initialize karo PEHLE sliderContainer ke
+        // LedVuMeter initialize karo PEHLE sliderContainer ke
         ledVuMeter = new LedVuMeter();
         if (audioCallbackHandler != null) {
             ledVuMeter.setAudioCallbackHandler(audioCallbackHandler);
@@ -330,13 +352,15 @@ public class PlayerController extends Application {
             sliderContainer.getChildren().add(0, titleWithVu);
         } catch (Exception e) {
             e.printStackTrace();
-        }       HBox controlsWrapper = controlsUtil.createControls(progressSlider, playlistPill);
+        }
+        HBox controlsWrapper = controlsUtil.createControls(progressSlider, playlistPill);
         globalControlsWrapper = controlsWrapper;
 
         HBox bottomBar = controlsUtil.createBottomBar();
         globalBottomBar = bottomBar;
 
         Label downloadLabel = controlsUtil.getDownloadLabel(bottomBar);
+        globalDownloadLabel = downloadLabel;
 
         if (downloadLabel != null) {
             bottomBar.getChildren().remove(downloadLabel);
@@ -450,6 +474,7 @@ public class PlayerController extends Application {
 
             NetworkMonitor.getInstance().stop();
             MemoryWatchdog.getInstance().stop();
+            HeartbeatService.getInstance().stop();
 
             // ✅ VU Meter cleanup
             if (ledVuMeter != null) {
@@ -594,6 +619,14 @@ public class PlayerController extends Application {
 
         schedular.scheduleAtFixedRate(() -> {
             try {
+                checkAndApplyVolumeSchedule();
+            } catch (Exception e) {
+                AppLogger.log("[Volume] Schedule check failed: " + e.getMessage());
+            }
+        }, 0, 5, java.util.concurrent.TimeUnit.SECONDS);
+
+        schedular.scheduleAtFixedRate(() -> {
+            try {
                 File tempDir = new File(System.getProperty("user.home")
                         + File.separator + ".scamusica"
                         + File.separator + "temp");
@@ -624,6 +657,16 @@ public class PlayerController extends Application {
         if (!NetworkMonitor.getInstance().isOnline()) {
             AppLogger.log("[SYNC] Offline — aborting sync");
             return;
+        }
+
+        try {
+            VolumeSettings newSettings = apiService.fetchVolumeSettings();
+            if (newSettings != null) {
+                currentVolumeSettings = newSettings;
+                checkAndApplyVolumeSchedule();
+            }
+        } catch (Exception e) {
+            AppLogger.log("[SYNC] Failed to sync volume settings: " + e.getMessage());
         }
 
         try {
@@ -716,17 +759,61 @@ public class PlayerController extends Application {
                     if (serverTitles != null && !serverTitles.isEmpty()) {
                         Platform.runLater(() -> {
                             try {
+                                List<String> newSequences = serverTitles.stream()
+                                        .filter(title -> !playlistMaster.contains(title))
+                                        .collect(Collectors.toList());
+
+                                boolean sequenceSwitched = false;
+                                String nextSequence = null;
+
+//                                This commented code for the Autoswitch the sequence when deduct the new sequence or current sequnece is removed.
+
+//                                if (!newSequences.isEmpty()) {
+//                                    nextSequence = newSequences.get(0);
+//                                    AppLogger.log("[SYNC] New sequence(s) added detected! Switching immediately to: " + nextSequence);
+//                                    sequenceSwitched = true;
+//                                } else if (currentPlaylistName != null && !serverTitles.contains(currentPlaylistName)) {
+//                                    if (!serverTitles.isEmpty()) {
+//                                        nextSequence = serverTitles.get(0);
+//                                        AppLogger.log("[SYNC] Current sequence removed detected! Switching to fallback: " + nextSequence);
+//                                        sequenceSwitched = true;
+//                                    }
+//                                }
+
                                 if (!serverTitles.equals(playlistMaster)) {
                                     playlistMaster.clear();
                                     playlistMaster.addAll(serverTitles);
-
-                                    playlistViewItems.setAll(
-                                            playlistMaster.stream()
-                                                    .filter(s -> !s.equals(playlistCurrent[0]))
-                                                    .collect(Collectors.toList()));
-
                                     AppLogger.log("[SYNC] Playlist titles updated: " + serverTitles.size());
                                 }
+
+                                if (sequenceSwitched && nextSequence != null) {
+                                    currentPlaylistName = nextSequence;
+                                    playlistCurrent[0] = nextSequence;
+
+                                    if (playlistPill != null) {
+                                        Label textLabel = (Label) playlistPill.getChildren().get(0);
+                                        textLabel.setText(nextSequence);
+                                    }
+
+                                    loadPlaylistAndStart(
+                                            nextSequence,
+                                            globalAlbumHeading,
+                                            globalTitleLabel,
+                                            globalProgressSlider,
+                                            globalLeftTime,
+                                            globalRightTime,
+                                            globalControlsWrapper,
+                                            globalBottomBar,
+                                            globalDownloadLabel,
+                                            true
+                                    );
+                                }
+
+                                // Always update view items to reflect current master and current playlist correctly
+                                playlistViewItems.setAll(
+                                        playlistMaster.stream()
+                                                .filter(s -> !s.equals(playlistCurrent[0]))
+                                                .collect(Collectors.toList()));
                             } catch (Exception e) {
                                 e.printStackTrace();
                             }
@@ -757,7 +844,9 @@ public class PlayerController extends Application {
 
                 Platform.runLater(() -> {
                     try {
+                        globalTitleLabel.textProperty().unbind();
                         globalTitleLabel.setText("ADVERTISEMENT");
+                        globalAlbumHeading.textProperty().unbind();
                         globalAlbumHeading.setText(ad.getCampaignName());
 
                         if (globalProgressSlider != null) {
@@ -770,11 +859,11 @@ public class PlayerController extends Application {
 
                         setGenreSwitchEnabled(false);
 
-//                        // Ad start hone par saved volume restore karo
-//                        double savedVol = prefs.getDouble(PREF_VOLUME, 85.0);
-//                        if (vlcPlayer != null) {
-//                            vlcPlayer.audio().setVolume((int) savedVol);
-//                        }
+                        // // Ad start hone par saved volume restore karo
+                        // double savedVol = prefs.getDouble(PREF_VOLUME, 85.0);
+                        // if (vlcPlayer != null) {
+                        // vlcPlayer.audio().setVolume((int) savedVol);
+                        // }
 
                         if (globalBottomBar != null) {
                             Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
@@ -801,7 +890,9 @@ public class PlayerController extends Application {
 
                         if (!playQueue.isEmpty() && currentTrackIndex < playQueue.size()) {
                             PlaylistTrack track = playQueue.get(currentTrackIndex);
+                            globalTitleLabel.textProperty().unbind();
                             globalTitleLabel.setText(track.getTitle());
+                            globalAlbumHeading.textProperty().unbind();
                             globalAlbumHeading.setText(currentPlaylistName);
                         }
 
@@ -824,6 +915,20 @@ public class PlayerController extends Application {
             @Override
             public void onSongPaused(String reason) {
                 AppLogger.log("[AdPlayer] Song paused: " + reason);
+                Platform.runLater(() -> {
+                    try {
+                        if (globalBottomBar != null && controlsUtil != null) {
+                            Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                            if (volumeSlider != null) {
+                                double savedPrefVol = prefs.getDouble(PREF_VOLUME, 85.0);
+                                volumeSlider.setValue(getCurrentAdVolume());
+                                prefs.putDouble(PREF_VOLUME, savedPrefVol);
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
             }
 
             @Override
@@ -889,6 +994,15 @@ public class PlayerController extends Application {
                                                             Thread.sleep(100);
                                                         }
                                                         vlcPlayer.audio().setVolume(originalVol);
+                                                        
+                                                        Platform.runLater(() -> {
+                                                            if (globalBottomBar != null && controlsUtil != null) {
+                                                                Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                                                                if (volumeSlider != null) {
+                                                                    volumeSlider.setValue(originalVol);
+                                                                }
+                                                            }
+                                                        });
                                                     } catch (Exception e) {
                                                     }
                                                 });
@@ -911,7 +1025,8 @@ public class PlayerController extends Application {
                                             Platform.runLater(() -> {
                                                 try {
                                                     vlcPlayer.audio().setVolume(0);
-                                                } catch (Exception ex) {}
+                                                } catch (Exception ex) {
+                                                }
                                             });
                                             Thread.sleep(30);
                                         }
@@ -928,7 +1043,8 @@ public class PlayerController extends Application {
                                             Platform.runLater(() -> {
                                                 try {
                                                     vlcPlayer.audio().setVolume(0);
-                                                } catch (Exception ex) {}
+                                                } catch (Exception ex) {
+                                                }
                                             });
                                             int steps = 20;
                                             for (int i = 1; i <= steps; i++) {
@@ -936,14 +1052,22 @@ public class PlayerController extends Application {
                                                 Platform.runLater(() -> {
                                                     try {
                                                         vlcPlayer.audio().setVolume(currentVol);
-                                                    } catch (Exception ex) {}
+                                                    } catch (Exception ex) {
+                                                    }
                                                 });
                                                 Thread.sleep(100);
                                             }
                                             Platform.runLater(() -> {
                                                 try {
                                                     vlcPlayer.audio().setVolume(originalVol);
-                                                } catch (Exception ex) {}
+                                                    if (globalBottomBar != null && controlsUtil != null) {
+                                                        Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                                                        if (volumeSlider != null) {
+                                                            volumeSlider.setValue(originalVol);
+                                                        }
+                                                    }
+                                                } catch (Exception ex) {
+                                                }
                                             });
                                         } catch (Exception e) {
                                         }
@@ -967,6 +1091,8 @@ public class PlayerController extends Application {
                 AppLogger.log("[AdPlayer] Playback error: " + ex.getMessage());
             }
         });
+
+        adPlayer.setAdVolumeProvider(this::getCurrentAdVolume);
 
         // 2. Fetch ads from server
         try {
@@ -1152,15 +1278,15 @@ public class PlayerController extends Application {
     }
 
     private void loadPlaylistAndStart(String playlistName,
-                                      Label albumHeading,
-                                      Label titleLabel,
-                                      Slider progressSlider,
-                                      Label leftTime,
-                                      Label rightTime,
-                                      HBox controlsWrapper,
-                                      HBox bottomBar,
-                                      Label downloadLabel,
-                                      boolean autoPlay) throws URISyntaxException {
+            Label albumHeading,
+            Label titleLabel,
+            Slider progressSlider,
+            Label leftTime,
+            Label rightTime,
+            HBox controlsWrapper,
+            HBox bottomBar,
+            Label downloadLabel,
+            boolean autoPlay) throws URISyntaxException {
 
         stopPlayback(progressSlider, leftTime, rightTime, controlsWrapper, downloadLabel);
 
@@ -1495,7 +1621,7 @@ public class PlayerController extends Application {
         }
 
         final String text = String.format("%.0f%% %s (%d/%d)", percent, LanguageManager.createStringBinding("label" +
-                        ".download").get(),
+                ".download").get(),
                 currentGenreDownloadedCount.get(), currentGenreTotalFiles);
 
         boolean isDone = (currentGenreDownloadedCount.get() == currentGenreTotalFiles
@@ -1517,14 +1643,14 @@ public class PlayerController extends Application {
     }
 
     private void playTrack(Label albumHeading,
-                           Label titleLabel,
-                           Slider progressSlider,
-                           Label leftTime,
-                           Label rightTime,
-                           HBox controlsWrapper,
-                           HBox bottomBar,
-                           Label downloadLabel,
-                           boolean autoPlay) throws URISyntaxException {
+            Label titleLabel,
+            Slider progressSlider,
+            Label leftTime,
+            Label rightTime,
+            HBox controlsWrapper,
+            HBox bottomBar,
+            Label downloadLabel,
+            boolean autoPlay) throws URISyntaxException {
 
         if (playQueue.isEmpty())
             return;
@@ -1613,7 +1739,8 @@ public class PlayerController extends Application {
             AppLogger.log("File exists: " + encryptedFile.exists());
 
             if (!encryptedFile.exists() && !NetworkMonitor.getInstance().isOnline()) {
-                AppLogger.log("[PLAYER] Offline and file doesn't exist for song-" + track.getId() + ", skipping to next.");
+                AppLogger.log(
+                        "[PLAYER] Offline and file doesn't exist for song-" + track.getId() + ", skipping to next.");
                 Platform.runLater(() -> {
                     try {
                         playNextTrack(albumHeading, titleLabel, progressSlider,
@@ -1789,7 +1916,8 @@ public class PlayerController extends Application {
             @Override
             public void timeChanged(MediaPlayer mediaPlayer, long newTime) {
                 long now = System.currentTimeMillis();
-                if (now - lastTimeChangedMillis < 250) return; // Throttle to 250ms
+                if (now - lastTimeChangedMillis < 250)
+                    return; // Throttle to 250ms
                 lastTimeChangedMillis = now;
 
                 Platform.runLater(() -> {
@@ -1814,7 +1942,7 @@ public class PlayerController extends Application {
                             float volFactor = vol / 100.0f;
                             float minLevel = 0.25f * volFactor;
                             float maxLevel = volFactor;
-                            float sim = minLevel + (float)(Math.random() * (maxLevel - minLevel));
+                            float sim = minLevel + (float) (Math.random() * (maxLevel - minLevel));
                             ledVuMeter.setManualLevel(sim);
                         }
                     }
@@ -1856,13 +1984,13 @@ public class PlayerController extends Application {
     }
 
     private void playNextTrack(Label albumHeading,
-                               Label titleLabel,
-                               Slider progressSlider,
-                               Label leftTime,
-                               Label rightTime,
-                               HBox controlsWrapper,
-                               HBox bottomBar,
-                               Label downloadLabel) throws URISyntaxException {
+            Label titleLabel,
+            Slider progressSlider,
+            Label leftTime,
+            Label rightTime,
+            HBox controlsWrapper,
+            HBox bottomBar,
+            Label downloadLabel) throws URISyntaxException {
 
         currentTrackIndex++;
         AppLogger.log("[PLAYER] Next track index: " + currentTrackIndex);
@@ -1885,13 +2013,13 @@ public class PlayerController extends Application {
     }
 
     private void setupBigPlayBehaviour(Label albumHeading,
-                                       Label titleLabel,
-                                       HBox controlsWrapper,
-                                       Slider progressSlider,
-                                       Label leftTime,
-                                       Label rightTime,
-                                       HBox bottomBar,
-                                       Label downloadLabel) {
+            Label titleLabel,
+            HBox controlsWrapper,
+            Slider progressSlider,
+            Label leftTime,
+            Label rightTime,
+            HBox bottomBar,
+            Label downloadLabel) {
 
         Button bigPlayBtn;
         StackPane playContainer;
@@ -1969,12 +2097,13 @@ public class PlayerController extends Application {
     }
 
     private void stopPlayback(Slider progressSlider,
-                              Label leftTime,
-                              Label rightTime,
-                              HBox controlsWrapper,
-                              Label downloadLabel) {
+            Label leftTime,
+            Label rightTime,
+            HBox controlsWrapper,
+            Label downloadLabel) {
 
-        // Intentionally NOT removing VLC listener or setting vlcHandlersAttached to false
+        // Intentionally NOT removing VLC listener or setting vlcHandlersAttached to
+        // false
         // to prevent JNA native callback memory leaks
 
         cleanupTempFile();
@@ -2072,8 +2201,8 @@ public class PlayerController extends Application {
         File tempFile = new File(tempDir, "play_" + System.currentTimeMillis() + ".mp3");
 
         try (FileInputStream fis = new FileInputStream(encryptedFile);
-             CipherInputStream cis = CryptoUtil.decrypt(fis);
-             FileOutputStream fos = new FileOutputStream(tempFile)) {
+                CipherInputStream cis = CryptoUtil.decrypt(fis);
+                FileOutputStream fos = new FileOutputStream(tempFile)) {
 
             byte[] buffer = new byte[8192];
             int read;
@@ -2110,5 +2239,59 @@ public class PlayerController extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private int getCurrentAdVolume() {
+        if (currentVolumeSettings == null) {
+            return (int) prefs.getDouble(PREF_VOLUME, 85.0);
+        }
+        if (currentScheduleId != null && currentVolumeSettings.getSchedules() != null) {
+            for (VolumeSchedule sched : currentVolumeSettings.getSchedules()) {
+                if (sched.getId() == currentScheduleId) {
+                    return sched.getAdVolume();
+                }
+            }
+        }
+        return currentVolumeSettings.getAdVolume();
+    }
+
+    private void checkAndApplyVolumeSchedule() {
+        if (currentVolumeSettings == null) return;
+        
+        String currentTime = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        Integer activeScheduleId = null;
+        Integer targetMusicVolume = currentVolumeSettings.getMusicVolume();
+
+        if (currentVolumeSettings.getSchedules() != null) {
+            for (VolumeSchedule sched : currentVolumeSettings.getSchedules()) {
+                if (sched.getStartTime() != null && sched.getEndTime() != null) {
+                    if (currentTime.compareTo(sched.getStartTime()) >= 0 && currentTime.compareTo(sched.getEndTime()) <= 0) {
+                        activeScheduleId = sched.getId();
+                        targetMusicVolume = sched.getMusicVolume();
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!java.util.Objects.equals(activeScheduleId, currentScheduleId)) {
+            AppLogger.log("[Volume] Schedule changed. New Schedule ID: " + activeScheduleId + ", Music Volume: " + targetMusicVolume);
+            currentScheduleId = activeScheduleId;
+            final int volToApply = targetMusicVolume;
+            Platform.runLater(() -> {
+                try {
+                    prefs.putDouble(PREF_VOLUME, volToApply);
+                    vlcPlayer.audio().setVolume(volToApply);
+                    if (globalBottomBar != null) {
+                        Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                        if (volumeSlider != null) {
+                            volumeSlider.setValue(volToApply);
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+        }
     }
 }

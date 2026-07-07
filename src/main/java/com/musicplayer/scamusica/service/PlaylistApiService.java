@@ -4,6 +4,8 @@ import com.google.gson.*;
 import com.musicplayer.scamusica.manager.SessionManager;
 import com.musicplayer.scamusica.model.Ad;
 import com.musicplayer.scamusica.model.PlaylistTrack;
+import com.musicplayer.scamusica.model.VolumeSchedule;
+import com.musicplayer.scamusica.model.VolumeSettings;
 import com.musicplayer.scamusica.util.ApiClient;
 import com.musicplayer.scamusica.util.AppLogger;
 import com.musicplayer.scamusica.util.OfflineCache;
@@ -506,6 +508,39 @@ public class PlaylistApiService {
             // Try cache if available
             // List<Ad> cached = OfflineCache.loadAds();
             return new ArrayList<>();
+        }
+    }
+
+    public VolumeSettings fetchVolumeSettings() throws Exception {
+        try {
+            JsonObject root = fetchRootJson();
+            if (!root.has("data") || !root.get("data").isJsonObject()) {
+                return null;
+            }
+
+            JsonObject dataObj = root.getAsJsonObject("data");
+            if (!dataObj.has("volume") || !dataObj.get("volume").isJsonObject()) {
+                return null;
+            }
+
+            Gson gson = new Gson();
+            VolumeSettings volumeSettings = gson.fromJson(dataObj.get("volume"), VolumeSettings.class);
+            AppLogger.log("[PlaylistApiService] Fetched volume settings from API");
+
+            if (volumeSettings != null) {
+                OfflineCache.saveVolumeSettings(volumeSettings);
+            }
+
+            return volumeSettings;
+
+        } catch (Exception e) {
+            AppLogger.log("[PlaylistApiService] fetchVolumeSettings failed: " + e.getMessage());
+            VolumeSettings cached = OfflineCache.loadVolumeSettings();
+            if (cached != null) {
+                AppLogger.log("[PlaylistApiService] Using cached volume settings");
+                return cached;
+            }
+            return null;
         }
     }
 }
