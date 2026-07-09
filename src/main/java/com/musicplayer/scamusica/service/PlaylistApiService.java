@@ -382,7 +382,7 @@ public class PlaylistApiService {
         if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
             fullUrl = filePath;
         } else {
-            fullUrl = Utility.BASE_URL.get() + filePath;
+            fullUrl = Utility.FILEPATH_BASE_URL.get() + filePath;
         }
 
         int durationSeconds = 0;
@@ -411,7 +411,7 @@ public class PlaylistApiService {
             if (albumImgPath.startsWith("http://") || albumImgPath.startsWith("https://")) {
                 fullAlbumImgUrl = albumImgPath;
             } else {
-                fullAlbumImgUrl = Utility.BASE_URL.get()
+                fullAlbumImgUrl = Utility.FILEPATH_BASE_URL.get()
                         + "/"
                         + albumImgPath.replaceFirst("^/", "");
             }

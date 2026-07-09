@@ -131,7 +131,7 @@ public class PlayerController extends Application {
     private LedVuMeter ledVuMeter;
     
     private VolumeSettings currentVolumeSettings;
-    private Integer currentScheduleId;
+    private Integer currentScheduleId = -999;
 
     @Override
     public void start(Stage primaryStage) {

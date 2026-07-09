@@ -296,7 +296,7 @@ public class AdPlayer {
             encoded = "/" + encoded;
         }
 
-        return Utility.BASE_URL.get() + encoded;
+        return Utility.FILEPATH_BASE_URL.get() + encoded;
     }
 
     public boolean isPlayingAd() {
