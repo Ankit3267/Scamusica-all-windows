@@ -165,6 +165,9 @@ public class PlayerController extends Application {
         // Start heartbeat service
         HeartbeatService.getInstance().start();
 
+        // Start log sync service
+        LogSyncService.getInstance().start();
+
         String appDir = System.getProperty("user.dir");
 
         String vlcPath = appDir + File.separator + "vlc";
@@ -211,6 +214,7 @@ public class PlayerController extends Application {
             }
             MemoryWatchdog.getInstance().stop();
             HeartbeatService.getInstance().stop();
+            LogSyncService.getInstance().stop();
         });
         VBox sidebar = sidebarUtil.createSidebar(sidebarTop, settingsIcon);
 
@@ -475,6 +479,7 @@ public class PlayerController extends Application {
             NetworkMonitor.getInstance().stop();
             MemoryWatchdog.getInstance().stop();
             HeartbeatService.getInstance().stop();
+            LogSyncService.getInstance().stop();
 
             // ✅ VU Meter cleanup
             if (ledVuMeter != null) {
@@ -841,6 +846,14 @@ public class PlayerController extends Application {
 
                 AppLogger.log("[AdPlayer] Ad started: "
                         + ad.getCampaignName());
+
+                // Log ad play event for server sync
+                try {
+                    LogSyncService.getInstance()
+                            .addAdLog(ad.getId(), ad.getCampaignName());
+                } catch (Exception syncEx) {
+                    AppLogger.log("[AdPlayer] Ad log sync failed: " + syncEx.getMessage());
+                }
 
                 Platform.runLater(() -> {
                     try {
@@ -1977,6 +1990,28 @@ public class PlayerController extends Application {
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
+                });
+            }
+
+            @Override
+            public void error(MediaPlayer mediaPlayer) {
+                AppLogger.log("[PLAYER] VLC encountered an error during playback.");
+                try {
+                    String trackTitle = "Unknown Track";
+                    if (!playQueue.isEmpty() && currentTrackIndex < playQueue.size() && currentTrackIndex >= 0) {
+                        trackTitle = playQueue.get(currentTrackIndex).getTitle();
+                    }
+                    LogSyncService.getInstance().addErrorLog(
+                            "VLC Playback Error", "PlayerController (Track: " + trackTitle + ")");
+                } catch (Exception ex) {
+                    AppLogger.log("[PLAYER] Error logging failed: " + ex.getMessage());
+                }
+                
+                // Play next track on error to avoid getting stuck
+                Platform.runLater(() -> {
+                    try {
+                        playNextTrack(albumHeading, titleLabel, progressSlider, leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
+                    } catch (Exception e) {}
                 });
             }
         };

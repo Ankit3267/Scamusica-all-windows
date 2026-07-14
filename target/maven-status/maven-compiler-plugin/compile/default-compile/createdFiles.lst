@@ -3,6 +3,7 @@ com/musicplayer/scamusica/util/AppLogger.class
 com/musicplayer/scamusica/util/CryptoUtil.class
 com/musicplayer/scamusica/model/PlaylistTrack.class
 com/musicplayer/scamusica/controller/PlayerController$3.class
+com/musicplayer/scamusica/model/VolumeSettings.class
 com/musicplayer/scamusica/service/NetworkMonitor.class
 com/musicplayer/scamusica/service/AdPlayer$1.class
 com/musicplayer/scamusica/manager/SessionManager.class
@@ -37,6 +38,7 @@ com/musicplayer/scamusica/util/OfflineCache$1.class
 com/musicplayer/scamusica/controller/CodeVerificationController.class
 com/musicplayer/scamusica/controller/PlayerController$2.class
 com/musicplayer/scamusica/service/ConnectivityMonitor.class
+com/musicplayer/scamusica/service/LogSyncService.class
 com/musicplayer/scamusica/manager/DeviceFingerprint.class
 com/musicplayer/scamusica/ui/LeavingPopup.class
 com/musicplayer/scamusica/service/PlaylistApiService.class
@@ -54,6 +56,7 @@ com/musicplayer/scamusica/service/MemoryWatchdog.class
 com/musicplayer/scamusica/Main.class
 com/musicplayer/scamusica/controller/PlayerController$4.class
 com/musicplayer/scamusica/manager/LanguageManager.class
+com/musicplayer/scamusica/model/VolumeSchedule.class
 com/musicplayer/scamusica/ui/PlayerAlbum.class
 com/musicplayer/scamusica/ui/LangItem.class
 com/musicplayer/scamusica/manager/AppConfig.class

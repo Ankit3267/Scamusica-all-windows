@@ -201,6 +201,12 @@ public class AdPlayer {
                             @Override
                             public void error(MediaPlayer mediaPlayer) {
                                 AppLogger.log("[AdPlayer] Ad audio error");
+                                try {
+                                    LogSyncService.getInstance().addErrorLog(
+                                            "VLC Ad Playback Error", "AdPlayer (Campaign: " + ad.getCampaignName() + ")");
+                                } catch (Exception ex) {
+                                    AppLogger.log("[AdPlayer] Error logging failed: " + ex.getMessage());
+                                }
                                 latch.countDown();
                             }
                         };
