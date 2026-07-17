@@ -13,7 +13,8 @@ public enum Utility {
 
     VERIFY_LICENSE_CODE("/api/auth/verify-license-code"),
     PLAYER_HEARTBEAT("/api/player/heartbeat"),
-    LOG_SYNC_ENDPOINT("/api/logs/sync");
+    LOG_SYNC_ENDPOINT("/api/logs/sync"),
+    SUPPORT_URL("https://scamusica.com/support");
 
     private final String value;
 

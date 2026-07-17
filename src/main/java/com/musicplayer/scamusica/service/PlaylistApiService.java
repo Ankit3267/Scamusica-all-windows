@@ -382,7 +382,9 @@ public class PlaylistApiService {
         if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
             fullUrl = filePath;
         } else {
-            fullUrl = Utility.FILEPATH_BASE_URL.get() + filePath;
+//            fullUrl = Utility.FILEPATH_BASE_URL.get() + filePath;
+            fullUrl = Utility.FILEPATH_BASE_URL.get() + "/" + filePath.replaceFirst("^/", "");
+
         }
 
         int durationSeconds = 0;
