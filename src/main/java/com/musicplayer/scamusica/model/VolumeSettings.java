@@ -4,8 +4,8 @@ import java.util.List;
 
 public class VolumeSettings {
     private String volume_source;
-    private int music_volume;
-    private int ad_volume;
+    private Integer music_volume;
+    private Integer ad_volume;
     private List<VolumeSchedule> schedules;
 
     public String getVolumeSource() {
@@ -16,19 +16,19 @@ public class VolumeSettings {
         this.volume_source = volume_source;
     }
 
-    public int getMusicVolume() {
+    public Integer getMusicVolume() {
         return music_volume;
     }
 
-    public void setMusicVolume(int music_volume) {
+    public void setMusicVolume(Integer music_volume) {
         this.music_volume = music_volume;
     }
 
-    public int getAdVolume() {
+    public Integer getAdVolume() {
         return ad_volume;
     }
 
-    public void setAdVolume(int ad_volume) {
+    public void setAdVolume(Integer ad_volume) {
         this.ad_volume = ad_volume;
     }
 

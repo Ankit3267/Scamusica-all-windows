@@ -14,7 +14,7 @@ import java.util.concurrent.*;
 public class AdPlayer {
 
     public interface AdPlaybackListener {
-        void onAdPlaybackStarted(Ad ad);
+        void onAdPlaybackStarted(Ad ad, com.musicplayer.scamusica.model.AdAudio adAudio);
 
         void onAdPlaybackFinished(Ad ad);
 
@@ -189,7 +189,7 @@ public class AdPlayer {
 
                 Platform.runLater(() -> {
                     try {
-                        listener.onAdPlaybackStarted(ad);
+                        listener.onAdPlaybackStarted(ad, adAudio);
 
                         adListener[0] = new MediaPlayerEventAdapter() {
                             @Override
@@ -208,6 +208,21 @@ public class AdPlayer {
                                     AppLogger.log("[AdPlayer] Error logging failed: " + ex.getMessage());
                                 }
                                 latch.countDown();
+                            }
+
+                            private volatile boolean started = false;
+
+                            @Override
+                            public void playing(MediaPlayer mediaPlayer) {
+                                started = true;
+                            }
+
+                            @Override
+                            public void stopped(MediaPlayer mediaPlayer) {
+                                if (started) {
+                                    AppLogger.log("[AdPlayer] Ad audio stopped/interrupted");
+                                    latch.countDown();
+                                }
                             }
                         };
                         vlcPlayer.events().addMediaPlayerEventListener(adListener[0]);

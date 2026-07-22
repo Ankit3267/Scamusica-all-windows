@@ -89,6 +89,7 @@ public class PlayerController extends Application {
     private int currentTrackIndex = 0;
 
     private volatile boolean isFirstTrackStarted = false;
+    private int consecutiveErrorCount = 0;
 
     private ImageView albumImageView;
     private String currentAlbumImgUrl = null;
@@ -755,6 +756,24 @@ public class PlayerController extends Application {
                 }
             }
 
+            // Update Total files count for UI
+            try {
+                List<Integer> serverDownloadSeq = apiService.fetchDownloadSequenceForGenre(currentPlaylist);
+                if (serverDownloadSeq != null) {
+                    currentGenreTotalFiles = serverDownloadSeq.size();
+                } else {
+                    currentGenreTotalFiles = serverTracks.size();
+                }
+                
+                if (globalDownloadLabel != null) {
+                    Platform.runLater(() -> {
+                        updateGenreDownloadLabel(globalDownloadLabel);
+                    });
+                }
+            } catch (Exception e) {
+                AppLogger.log("[SYNC] Failed to update download sequence count: " + e.getMessage());
+            }
+
             try {
                 syncAdsFromServer();
                 // ✅ Playlist titles sync
@@ -842,7 +861,7 @@ public class PlayerController extends Application {
         // 1. Create AdPlayer with listeners
         adPlayer = new AdPlayer(vlcPlayer, new AdPlayer.AdPlaybackListener() {
             @Override
-            public void onAdPlaybackStarted(Ad ad) {
+            public void onAdPlaybackStarted(Ad ad, com.musicplayer.scamusica.model.AdAudio adAudio) {
 
                 AppLogger.log("[AdPlayer] Ad started: "
                         + ad.getCampaignName());
@@ -850,7 +869,7 @@ public class PlayerController extends Application {
                 // Log ad play event for server sync
                 try {
                     LogSyncService.getInstance()
-                            .addAdLog(ad.getId(), ad.getCampaignName());
+                            .addAdLog(ad.getId(), ad.getCampaignName(), adAudio != null ? adAudio.getAdTitle() : null, adAudio != null ? adAudio.getAudioFile() : null);
                 } catch (Exception syncEx) {
                     AppLogger.log("[AdPlayer] Ad log sync failed: " + syncEx.getMessage());
                 }
@@ -878,13 +897,13 @@ public class PlayerController extends Application {
                         // vlcPlayer.audio().setVolume((int) savedVol);
                         // }
 
-                        if (globalBottomBar != null) {
-                            Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
-                            if (volumeSlider != null) {
-                                volumeSlider.setDisable(false);
-                                volumeSlider.setMouseTransparent(false);
-                            }
-                        }
+                        // if (globalBottomBar != null) {
+                        //     Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                        //     if (volumeSlider != null) {
+                        //         volumeSlider.setDisable(false);
+                        //         volumeSlider.setMouseTransparent(false);
+                        //     }
+                        // }
 
                     } catch (Exception e) {
                         e.printStackTrace();
@@ -1601,6 +1620,7 @@ public class PlayerController extends Application {
 
         albumHeading.textProperty().bind(LanguageManager.createStringBinding("label.loading"));
         if (!playQueue.isEmpty()) {
+            isFirstTrackStarted = true;
             playTrack(
                     albumHeading,
                     titleLabel,
@@ -1754,14 +1774,23 @@ public class PlayerController extends Application {
             if (!encryptedFile.exists() && !NetworkMonitor.getInstance().isOnline()) {
                 AppLogger.log(
                         "[PLAYER] Offline and file doesn't exist for song-" + track.getId() + ", skipping to next.");
-                Platform.runLater(() -> {
-                    try {
-                        playNextTrack(albumHeading, titleLabel, progressSlider,
-                                leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
-                    } catch (Exception ex) {
-                        ex.printStackTrace();
-                    }
-                });
+                
+                consecutiveErrorCount++;
+                if (consecutiveErrorCount > 3) {
+                    AppLogger.log("[PLAYER] Too many offline skips. Stopping loop.");
+                    return;
+                }
+
+                schedular.schedule(() -> {
+                    Platform.runLater(() -> {
+                        try {
+                            playNextTrack(albumHeading, titleLabel, progressSlider,
+                                    leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
+                        } catch (Exception ex) {
+                            ex.printStackTrace();
+                        }
+                    });
+                }, 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
                 return;
             }
 
@@ -1824,14 +1853,23 @@ public class PlayerController extends Application {
                         } else {
                             AppLogger.log("[PLAYER] Offline — cannot stream fallback for song-" + track.getId()
                                     + ", skipping to next.");
-                            Platform.runLater(() -> {
-                                try {
-                                    playNextTrack(albumHeading, titleLabel, progressSlider,
-                                            leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
-                                } catch (Exception ex) {
-                                    ex.printStackTrace();
-                                }
-                            });
+                            
+                            consecutiveErrorCount++;
+                            if (consecutiveErrorCount > 3) {
+                                AppLogger.log("[PLAYER] Too many offline decryption skips. Stopping loop.");
+                                return;
+                            }
+
+                            schedular.schedule(() -> {
+                                Platform.runLater(() -> {
+                                    try {
+                                        playNextTrack(albumHeading, titleLabel, progressSlider,
+                                                leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
+                                    } catch (Exception ex) {
+                                        ex.printStackTrace();
+                                    }
+                                });
+                            }, 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
                         }
                     } finally {
                         Thread.currentThread().setPriority(originalPriority);
@@ -1886,6 +1924,7 @@ public class PlayerController extends Application {
 
             @Override
             public void playing(MediaPlayer mediaPlayer) {
+                consecutiveErrorCount = 0;
                 Platform.runLater(() -> {
                     FontIcon bigIcon = controlsUtil.getBigPlayIcon(controlsWrapper);
                     if (bigIcon != null) {
@@ -2007,12 +2046,20 @@ public class PlayerController extends Application {
                     AppLogger.log("[PLAYER] Error logging failed: " + ex.getMessage());
                 }
                 
+                consecutiveErrorCount++;
+                if (consecutiveErrorCount > 3) {
+                    AppLogger.log("[PLAYER] Too many streaming errors. Stopping playback to wait for downloads.");
+                    return;
+                }
+                
                 // Play next track on error to avoid getting stuck
-                Platform.runLater(() -> {
-                    try {
-                        playNextTrack(albumHeading, titleLabel, progressSlider, leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
-                    } catch (Exception e) {}
-                });
+                schedular.schedule(() -> {
+                    Platform.runLater(() -> {
+                        try {
+                            playNextTrack(albumHeading, titleLabel, progressSlider, leftTime, rightTime, controlsWrapper, bottomBar, downloadLabel);
+                        } catch (Exception e) {}
+                    });
+                }, 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         };
         vlcPlayer.events().addMediaPlayerEventListener(currentVlcListener);
@@ -2277,10 +2324,10 @@ public class PlayerController extends Application {
     }
 
     private int getCurrentAdVolume() {
-        if (currentVolumeSettings == null) {
+        if (currentVolumeSettings == null || currentVolumeSettings.getAdVolume() == null) {
             return (int) prefs.getDouble(PREF_VOLUME, 85.0);
         }
-        if (currentScheduleId != null && currentVolumeSettings.getSchedules() != null) {
+        if (currentScheduleId != null && currentScheduleId != -999 && currentVolumeSettings.getSchedules() != null) {
             for (VolumeSchedule sched : currentVolumeSettings.getSchedules()) {
                 if (sched.getId() == currentScheduleId) {
                     return sched.getAdVolume();
@@ -2293,9 +2340,19 @@ public class PlayerController extends Application {
     private void checkAndApplyVolumeSchedule() {
         if (currentVolumeSettings == null) return;
         
+        // Do not interfere with volume if an ad is currently playing
+        if (adPlayer != null && adPlayer.isPlayingAd()) {
+            return;
+        }
+
         String currentTime = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
         Integer activeScheduleId = null;
         Integer targetMusicVolume = currentVolumeSettings.getMusicVolume();
+        
+        // Disable slider if volume_source is 'admin' or 'player' or if music_volume is explicitly configured.
+        final boolean isVolumeFromAdmin = currentVolumeSettings.getMusicVolume() != null &&
+            currentVolumeSettings.getVolumeSource() != null && 
+            ("admin".equalsIgnoreCase(currentVolumeSettings.getVolumeSource()) || "player".equalsIgnoreCase(currentVolumeSettings.getVolumeSource()));
 
         if (currentVolumeSettings.getSchedules() != null) {
             for (VolumeSchedule sched : currentVolumeSettings.getSchedules()) {
@@ -2309,24 +2366,52 @@ public class PlayerController extends Application {
             }
         }
 
-        if (!java.util.Objects.equals(activeScheduleId, currentScheduleId)) {
-            AppLogger.log("[Volume] Schedule changed. New Schedule ID: " + activeScheduleId + ", Music Volume: " + targetMusicVolume);
-            currentScheduleId = activeScheduleId;
-            final int volToApply = targetMusicVolume;
-            Platform.runLater(() -> {
-                try {
-                    prefs.putDouble(PREF_VOLUME, volToApply);
-                    vlcPlayer.audio().setVolume(volToApply);
-                    if (globalBottomBar != null) {
-                        Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
-                        if (volumeSlider != null) {
-                            volumeSlider.setValue(volToApply);
-                        }
+        final boolean isScheduleActive = (activeScheduleId != null);
+        final boolean shouldDisableSlider = isVolumeFromAdmin || isScheduleActive;
+        
+        Platform.runLater(() -> {
+            try {
+                if (globalBottomBar != null && controlsUtil != null) {
+                    Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                    if (volumeSlider != null) {
+                        volumeSlider.setDisable(shouldDisableSlider);
                     }
-                } catch (Exception e) {
-                    e.printStackTrace();
                 }
-            });
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+
+        // Use a consistent comparison, treating -999 as null for the baseline
+        Integer effectiveCurrentScheduleId = (currentScheduleId != null && currentScheduleId == -999) ? null : currentScheduleId;
+        boolean scheduleChanged = !java.util.Objects.equals(activeScheduleId, effectiveCurrentScheduleId);
+        
+        int currentSetVol = (int) prefs.getDouble(PREF_VOLUME, 85.0);
+        boolean volumeNeedsUpdate = (targetMusicVolume != null && targetMusicVolume != currentSetVol);
+
+        if (scheduleChanged || (shouldDisableSlider && volumeNeedsUpdate)) {
+            AppLogger.log("[Volume] Applying volume update. Schedule changed: " + scheduleChanged + 
+                          ", target volume: " + targetMusicVolume);
+            currentScheduleId = activeScheduleId; // Correctly store the exact schedule ID (or null)
+            if (targetMusicVolume != null) {
+                final int volToApply = targetMusicVolume;
+                Platform.runLater(() -> {
+                    try {
+                        prefs.putDouble(PREF_VOLUME, volToApply);
+                        if (vlcPlayer != null && vlcPlayer.audio() != null) {
+                            vlcPlayer.audio().setVolume(volToApply);
+                        }
+                        if (globalBottomBar != null && controlsUtil != null) {
+                            Slider volumeSlider = controlsUtil.getVolumeSlider(globalBottomBar);
+                            if (volumeSlider != null) {
+                                volumeSlider.setValue(volToApply);
+                            }
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
+            }
         }
     }
 }

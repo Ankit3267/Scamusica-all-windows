@@ -116,11 +116,15 @@ public class LogSyncService {
     /**
      * Add an AD log entry.
      */
-    public void addAdLog(Integer adId, String campaignName) {
+    public void addAdLog(Integer adId, String campaignName, String adTitle, String adFileName) {
         Map<String, String> entry = new LinkedHashMap<>();
         entry.put("type", "AD");
         entry.put("adId", adId != null ? adId.toString() : "");
-        entry.put("title", campaignName != null ? campaignName : "");
+        
+        String titleToStore = (adTitle != null && !adTitle.trim().isEmpty()) ? adTitle : (adFileName != null ? adFileName : "");
+        entry.put("title", titleToStore);
+        entry.put("playlist", campaignName != null ? campaignName : "");
+        
         entry.put("timestamp", ISO_FORMATTER.format(Instant.now()));
         enqueue(entry);
     }
